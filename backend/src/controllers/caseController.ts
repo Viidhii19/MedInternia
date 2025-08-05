@@ -1,0 +1,537 @@
+import { Response } from 'express';
+import Case, { ICase } from '../models/Case';
+import User from '../models/User';
+import { AuthRequest } from '../middleware/auth';
+
+// Create a new case (Doctor only)
+export const createCase = async (req: AuthRequest, res: Response) => {
+  try {
+    const user = req.user as { _id: string; userType: string; specialization?: string };
+    
+    if (!user) {
+      return res.status(401).json({
+        success: false,
+        message: 'User not authenticated'
+      });
+    }
+
+    if (user.userType !== 'doctor' && user.userType !== 'patient') {
+      return res.status(403).json({
+        success: false,
+        message: 'Only doctors and patients can create cases'
+      });
+    }
+
+    const {
+      title,
+      description,
+      symptoms,
+      patientInfo,
+      diagnosis,
+      treatment,
+      images,
+      tags,
+      difficulty,
+      specialization
+    } = req.body;
+
+    // Restrict patient case creation
+    if (user.userType === 'patient') {
+      // Patients can't set diagnosis, treatment, or difficulty
+      // These will be limited or undefined
+      const newCase = new Case({
+        title,
+        description,
+        symptoms: symptoms || [],
+        patientInfo: patientInfo || {},
+        images: images || [],
+        tags: tags || [],
+        difficulty: 'beginner', // Default for patient cases
+        specialization: 'General Medicine', // Default for patients
+        doctor: user._id as any,
+        isPatientCase: true
+      });
+
+      await newCase.save();
+      await newCase.populate('doctor', 'firstName lastName');
+
+      // Patients get fewer points for posting
+      const pointsForCase = 5;
+      await User.findByIdAndUpdate(
+        user._id,
+        { $inc: { points: pointsForCase } }
+      );
+
+      return res.status(201).json({
+        success: true,
+        message: 'Patient case created successfully',
+        data: {
+          case: newCase,
+          pointsAwarded: pointsForCase
+        }
+      });
+    }
+
+    // Doctor case creation (full features)
+    const newCase = new Case({
+      title,
+      description,
+      symptoms: symptoms || [],
+      patientInfo: patientInfo || {},
+      diagnosis,
+      treatment,
+      images: images || [],
+      tags: tags || [],
+      difficulty,
+      specialization: specialization || user.specialization,
+      doctor: user._id as any,
+      isPatientCase: false
+    });
+
+    await newCase.save();
+    await newCase.populate('doctor', 'firstName lastName specialization');
+
+    // Award points to doctor for posting case
+    const pointsForCase = 10; // Base points for posting a case
+    await User.findByIdAndUpdate(
+      user._id,
+      { $inc: { points: pointsForCase } }
+    );
+
+    await Case.findByIdAndUpdate(
+      newCase._id,
+      { pointsAwarded: pointsForCase }
+    );
+
+    res.status(201).json({
+      success: true,
+      message: 'Case created successfully',
+      data: {
+        case: newCase,
+        pointsAwarded: pointsForCase
+      }
+    });
+  } catch (error: any) {
+    console.error('Create case error:', error);
+    
+    if (error.name === 'ValidationError') {
+      const errors = Object.values(error.errors).map((err: any) => err.message);
+      return res.status(400).json({
+        success: false,
+        message: 'Validation error',
+        errors
+      });
+    }
+
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error'
+    });
+  }
+};
+
+// Get all cases with filters
+export const getCases = async (req: AuthRequest, res: Response) => {
+  try {
+    const {
+      specialization,
+      difficulty,
+      tags,
+      doctor,
+      page = 1,
+      limit = 10,
+      search
+    } = req.query;
+
+    const filter: any = { isActive: true };
+
+    if (specialization) {
+      filter.specialization = { $regex: specialization, $options: 'i' };
+    }
+
+    if (difficulty) {
+      filter.difficulty = difficulty;
+    }
+
+    if (tags) {
+      const tagArray = Array.isArray(tags) ? tags : [tags];
+      filter.tags = { $in: tagArray };
+    }
+
+    if (doctor) {
+      filter.doctor = doctor;
+    }
+
+    if (search) {
+      filter.$or = [
+        { title: { $regex: search, $options: 'i' } },
+        { description: { $regex: search, $options: 'i' } },
+        { tags: { $in: [new RegExp(search as string, 'i')] } }
+      ];
+    }
+
+    const pageNum = parseInt(page as string);
+    const limitNum = parseInt(limit as string);
+    const skip = (pageNum - 1) * limitNum;
+
+    const cases = await Case.find(filter)
+      .populate('doctor', 'firstName lastName specialization')
+      .populate('comments.author', 'firstName lastName userType')
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limitNum);
+
+    const total = await Case.countDocuments(filter);
+
+    res.json({
+      success: true,
+      data: {
+        cases,
+        pagination: {
+          page: pageNum,
+          limit: limitNum,
+          total,
+          pages: Math.ceil(total / limitNum)
+        }
+      }
+    });
+  } catch (error) {
+    console.error('Get cases error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error'
+    });
+  }
+};
+
+// Get single case by ID
+export const getCaseById = async (req: AuthRequest, res: Response) => {
+  try {
+    const { id } = req.params;
+
+    const caseData = await Case.findById(id)
+      .populate('doctor', 'firstName lastName specialization')
+      .populate('comments.author', 'firstName lastName userType')
+      .populate('likes', 'firstName lastName');
+
+    if (!caseData) {
+      return res.status(404).json({
+        success: false,
+        message: 'Case not found'
+      });
+    }
+
+    if (!caseData.isActive) {
+      return res.status(404).json({
+        success: false,
+        message: 'Case is no longer available'
+      });
+    }
+
+    res.json({
+      success: true,
+      data: {
+        case: caseData
+      }
+    });
+  } catch (error) {
+    console.error('Get case by ID error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error'
+    });
+  }
+};
+
+// Update case (Doctor who created it only)
+export const updateCase = async (req: AuthRequest, res: Response) => {
+  try {
+    const user = req.user;
+    const { id } = req.params;
+
+    if (!user) {
+      return res.status(401).json({
+        success: false,
+        message: 'User not authenticated'
+      });
+    }
+
+    const caseData = await Case.findById(id);
+
+    if (!caseData) {
+      return res.status(404).json({
+        success: false,
+        message: 'Case not found'
+      });
+    }
+
+    if (caseData.doctor.toString() !== user._id?.toString()) {
+      return res.status(403).json({
+        success: false,
+        message: 'You can only update your own cases'
+      });
+    }
+
+    const updates = req.body;
+    delete updates.doctor; // Prevent changing the doctor
+    delete updates.comments; // Comments are handled separately
+    delete updates.likes; // Likes are handled separately
+
+    const updatedCase = await Case.findByIdAndUpdate(
+      id,
+      updates,
+      { new: true, runValidators: true }
+    ).populate('doctor', 'firstName lastName specialization');
+
+    res.json({
+      success: true,
+      message: 'Case updated successfully',
+      data: {
+        case: updatedCase
+      }
+    });
+  } catch (error: any) {
+    console.error('Update case error:', error);
+    
+    if (error.name === 'ValidationError') {
+      const errors = Object.values(error.errors).map((err: any) => err.message);
+      return res.status(400).json({
+        success: false,
+        message: 'Validation error',
+        errors
+      });
+    }
+
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error'
+    });
+  }
+};
+
+// Delete case (Doctor who created it only)
+export const deleteCase = async (req: AuthRequest, res: Response) => {
+  try {
+    const user = req.user;
+    const { id } = req.params;
+
+    if (!user) {
+      return res.status(401).json({
+        success: false,
+        message: 'User not authenticated'
+      });
+    }
+
+    const caseData = await Case.findById(id);
+
+    if (!caseData) {
+      return res.status(404).json({
+        success: false,
+        message: 'Case not found'
+      });
+    }
+
+    if (caseData.doctor.toString() !== user._id?.toString()) {
+      return res.status(403).json({
+        success: false,
+        message: 'You can only delete your own cases'
+      });
+    }
+
+    // Soft delete
+    await Case.findByIdAndUpdate(id, { isActive: false });
+
+    res.json({
+      success: true,
+      message: 'Case deleted successfully'
+    });
+  } catch (error) {
+    console.error('Delete case error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error'
+    });
+  }
+};
+
+// Add comment to case
+export const addComment = async (req: AuthRequest, res: Response) => {
+  try {
+    const user = req.user;
+    const { id } = req.params;
+    const { content } = req.body;
+
+    if (!user) {
+      return res.status(401).json({
+        success: false,
+        message: 'User not authenticated'
+      });
+    }
+
+    if (!content || content.trim().length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Comment content is required'
+      });
+    }
+
+    const caseData = await Case.findById(id);
+
+    if (!caseData) {
+      return res.status(404).json({
+        success: false,
+        message: 'Case not found'
+      });
+    }
+
+    if (!caseData.isActive) {
+      return res.status(404).json({
+        success: false,
+        message: 'Case is no longer available'
+      });
+    }
+
+    const newComment = {
+      author: user._id as any,
+      content: content.trim()
+    };
+
+    caseData.comments.push(newComment as any);
+    await caseData.save();
+
+    await caseData.populate('comments.author', 'firstName lastName userType');
+
+    const addedComment = caseData.comments[caseData.comments.length - 1];
+
+    res.status(201).json({
+      success: true,
+      message: 'Comment added successfully',
+      data: {
+        comment: addedComment
+      }
+    });
+  } catch (error) {
+    console.error('Add comment error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error'
+    });
+  }
+};
+
+// Like/Unlike case
+export const toggleLike = async (req: AuthRequest, res: Response) => {
+  try {
+    const user = req.user;
+    const { id } = req.params;
+
+    if (!user) {
+      return res.status(401).json({
+        success: false,
+        message: 'User not authenticated'
+      });
+    }
+
+    const caseData = await Case.findById(id);
+
+    if (!caseData) {
+      return res.status(404).json({
+        success: false,
+        message: 'Case not found'
+      });
+    }
+
+    if (!caseData.isActive) {
+      return res.status(404).json({
+        success: false,
+        message: 'Case is no longer available'
+      });
+    }
+
+    const userIdString = user._id?.toString();
+    const likeIndex = caseData.likes.findIndex(like => like.toString() === userIdString);
+
+    let isLiked = false;
+    
+    if (likeIndex > -1) {
+      // Unlike
+      caseData.likes.splice(likeIndex, 1);
+      isLiked = false;
+    } else {
+      // Like
+      caseData.likes.push(user._id as any);
+      isLiked = true;
+    }
+
+    await caseData.save();
+
+    res.json({
+      success: true,
+      message: isLiked ? 'Case liked successfully' : 'Case unliked successfully',
+      data: {
+        isLiked,
+        totalLikes: caseData.likes.length
+      }
+    });
+  } catch (error) {
+    console.error('Toggle like error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error'
+    });
+  }
+};
+
+// Get cases by current doctor
+export const getMyCases = async (req: AuthRequest, res: Response) => {
+  try {
+    const user = req.user;
+
+    if (!user) {
+      return res.status(401).json({
+        success: false,
+        message: 'User not authenticated'
+      });
+    }
+
+    if (user.userType !== 'doctor') {
+      return res.status(403).json({
+        success: false,
+        message: 'Only doctors can view their cases'
+      });
+    }
+
+    const { page = 1, limit = 10 } = req.query;
+
+    const pageNum = parseInt(page as string);
+    const limitNum = parseInt(limit as string);
+    const skip = (pageNum - 1) * limitNum;
+
+    const cases = await Case.find({ doctor: user._id as any, isActive: true })
+      .populate('comments.author', 'firstName lastName userType')
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limitNum);
+
+    const total = await Case.countDocuments({ doctor: user._id as any, isActive: true });
+
+    res.json({
+      success: true,
+      data: {
+        cases,
+        pagination: {
+          page: pageNum,
+          limit: limitNum,
+          total,
+          pages: Math.ceil(total / limitNum)
+        }
+      }
+    });
+  } catch (error) {
+    console.error('Get my cases error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error'
+    });
+  }
+};

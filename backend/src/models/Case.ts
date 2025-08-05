@@ -1,0 +1,178 @@
+import mongoose, { Document, Schema } from 'mongoose';
+
+export interface IComment extends Document {
+  author: mongoose.Types.ObjectId;
+  content: string;
+  replies: IComment[];
+  parentComment?: mongoose.Types.ObjectId;
+  likes: mongoose.Types.ObjectId[];
+  rating?: number; // Rating given by doctor to intern comments (1-5)
+  ratedBy?: mongoose.Types.ObjectId; // Doctor who gave the rating
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface ICase extends Document {
+  title: string;
+  description: string;
+  symptoms: string[];
+  patientInfo: {
+    age?: number;
+    gender?: 'male' | 'female' | 'other';
+    medicalHistory?: string[];
+    currentMedications?: string[];
+  };
+  diagnosis?: string;
+  treatment?: string;
+  images?: string[];
+  tags: string[];
+  difficulty: 'beginner' | 'intermediate' | 'advanced';
+  specialization: string;
+  doctor: mongoose.Types.ObjectId;
+  comments: IComment[];
+  likes: mongoose.Types.ObjectId[];
+  isActive: boolean;
+  isPatientCase: boolean; // True if posted by patient
+  pointsAwarded: number; // Points given to doctor for posting
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+const CommentSchema = new Schema<IComment>({
+  author: {
+    type: Schema.Types.ObjectId,
+    ref: 'User',
+    required: true
+  },
+  content: {
+    type: String,
+    required: [true, 'Comment content is required'],
+    trim: true,
+    maxlength: [1000, 'Comment cannot be more than 1000 characters']
+  },
+  replies: [{
+    type: Schema.Types.ObjectId,
+    ref: 'Comment'
+  }],
+  parentComment: {
+    type: Schema.Types.ObjectId,
+    ref: 'Comment'
+  },
+  likes: [{
+    type: Schema.Types.ObjectId,
+    ref: 'User'
+  }],
+  rating: {
+    type: Number,
+    min: [1, 'Rating must be at least 1'],
+    max: [5, 'Rating cannot exceed 5']
+  },
+  ratedBy: {
+    type: Schema.Types.ObjectId,
+    ref: 'User'
+  }
+}, {
+  timestamps: true
+});
+
+const CaseSchema = new Schema<ICase>({
+  title: {
+    type: String,
+    required: [true, 'Case title is required'],
+    trim: true,
+    maxlength: [200, 'Title cannot be more than 200 characters']
+  },
+  description: {
+    type: String,
+    required: [true, 'Case description is required'],
+    trim: true,
+    maxlength: [5000, 'Description cannot be more than 5000 characters']
+  },
+  symptoms: [{
+    type: String,
+    trim: true
+  }],
+  patientInfo: {
+    age: {
+      type: Number,
+      min: [0, 'Age cannot be negative'],
+      max: [150, 'Age cannot be more than 150']
+    },
+    gender: {
+      type: String,
+      enum: ['male', 'female', 'other']
+    },
+    medicalHistory: [{
+      type: String,
+      trim: true
+    }],
+    currentMedications: [{
+      type: String,
+      trim: true
+    }]
+  },
+  diagnosis: {
+    type: String,
+    trim: true,
+    maxlength: [1000, 'Diagnosis cannot be more than 1000 characters']
+  },
+  treatment: {
+    type: String,
+    trim: true,
+    maxlength: [1000, 'Treatment cannot be more than 1000 characters']
+  },
+  images: [{
+    type: String,
+    trim: true
+  }],
+  tags: [{
+    type: String,
+    trim: true,
+    lowercase: true
+  }],
+  difficulty: {
+    type: String,
+    required: [true, 'Difficulty level is required'],
+    enum: ['beginner', 'intermediate', 'advanced']
+  },
+  specialization: {
+    type: String,
+    required: [true, 'Specialization is required'],
+    trim: true
+  },
+  doctor: {
+    type: Schema.Types.ObjectId,
+    ref: 'User',
+    required: true
+  },
+  comments: [CommentSchema],
+  likes: [{
+    type: Schema.Types.ObjectId,
+    ref: 'User'
+  }],
+  isActive: {
+    type: Boolean,
+    default: true
+  },
+  isPatientCase: {
+    type: Boolean,
+    default: false
+  },
+  pointsAwarded: {
+    type: Number,
+    default: 0,
+    min: [0, 'Points awarded cannot be negative']
+  }
+}, {
+  timestamps: true
+});
+
+// Indexes for better performance
+CaseSchema.index({ doctor: 1 });
+CaseSchema.index({ specialization: 1 });
+CaseSchema.index({ difficulty: 1 });
+CaseSchema.index({ tags: 1 });
+CaseSchema.index({ createdAt: -1 });
+CaseSchema.index({ 'comments.author': 1 });
+
+export default mongoose.model<ICase>('Case', CaseSchema);
