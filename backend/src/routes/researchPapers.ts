@@ -10,17 +10,21 @@ const router = express.Router();
 
 router.post('/', authenticate, requirePermission('import:run'), createResearchPaper);
 router.get('/', getAllResearchPapers);
-router.get('/:id', getResearchPaperById);
-
-// Download endpoint for research paper PDFs (assumes files are stored in backend/uploads)
+// Place specific routes BEFORE dynamic routes
 router.get('/download/:filename', (req, res) => {
-	const filename = req.params.filename;
-	const filePath = path.join(__dirname, '../../uploads', filename);
-	if (fs.existsSync(filePath)) {
-		res.download(filePath);
-	} else {
-		res.status(404).send('File not found');
-	}
+  const filename = req.params.filename;
+  const filePath = path.resolve(__dirname, '../../uploads', filename);
+
+  if (!fs.existsSync(filePath)) {
+    return res.status(404).json({
+      success: false,
+      message: 'File not found',
+    });
+  }
+
+  return res.download(filePath);
 });
+
+router.get('/:id', getResearchPaperById);
 
 export default router;
