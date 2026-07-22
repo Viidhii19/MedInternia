@@ -112,6 +112,8 @@ export const calculateMatchScore = (user: any, job: any): number => {
 export const getJobOpportunities = async (req: Request, res: Response) => {
   try {
     const {
+      search,
+      q,
       type,
       specialization,
       location,
@@ -126,21 +128,41 @@ export const getJobOpportunities = async (req: Request, res: Response) => {
     } = req.query;
 
     const filter: any = {};
+    const filterConditions: any[] = [];
+    const searchQuery = (search || q) as string | undefined;
+
     if (type) filter.type = type;
     if (specialization) {
-      if (Array.isArray(specialization)) {
-        filter.specialization = { $in: specialization };
-      } else {
-        filter.specialization = { $in: [specialization] };
-      }
+      const rawSpecs = Array.isArray(specialization) ? specialization : [specialization];
+      const specs = rawSpecs.map((s: any) => String(s).toLowerCase().replace(/\s+/g, '-'));
+      filter.specialization = { $in: specs };
     }
+
+    if (searchQuery) {
+      const searchRegex = new RegExp(searchQuery, 'i');
+      filterConditions.push({
+        $or: [
+          { title: searchRegex },
+          { description: searchRegex }
+        ]
+      });
+    }
+
     if (location) {
-      filter.$or = [
-        { 'location.city': new RegExp(location as string, 'i') },
-        { 'location.state': new RegExp(location as string, 'i') },
-        { 'location.country': new RegExp(location as string, 'i') }
-      ];
+      const locRegex = new RegExp(location as string, 'i');
+      filterConditions.push({
+        $or: [
+          { 'location.city': locRegex },
+          { 'location.state': locRegex },
+          { 'location.country': locRegex }
+        ]
+      });
     }
+
+    if (filterConditions.length > 0) {
+      filter.$and = filterConditions;
+    }
+
     if (isRemote !== undefined) filter['location.isRemote'] = isRemote === 'true';
     if (isActive !== undefined) filter.isActive = isActive === 'true';
     if (visaSponsorship === 'true') filter.visaSponsorship = true;
