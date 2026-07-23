@@ -859,3 +859,15 @@ export const createCase = asyncHandler(
     res.status(201).json({ success: true, data: { case: newCase } });
   }
 );
+
+export const getSimilarCases = asyncHandler(async (req: AuthRequest, res: Response) => {
+  const caseDoc = await Case.findById(getId(req.params.id));
+  if (!caseDoc) {
+    throw new AppError("Case not found", 404);
+  }
+
+  const text = `${caseDoc.title}\n${caseDoc.description}`;
+  const similar = await suggestCases(text, 3);
+
+  res.json({ success: true, data: { similarCases: similar } });
+});
